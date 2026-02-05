@@ -6,6 +6,7 @@ const productSchema = new mongoose.Schema(
     quantity: { type: Number, default: 1, min: 0 },
     unit_price: { type: Number, default: 0, min: 0 },
     expiry_date: { type: Date },
+    term: { type: String, enum: ['Term 1', 'Term 2', 'Both'], default: 'Term 1' },
   },
   { _id: false }
 );
@@ -29,6 +30,15 @@ const dcOrderSchema = new mongoose.Schema(
     city: { type: String },
     region: { type: String },
     area: { type: String },
+    // Old Delivery and Address fields (kept for backwards compatibility)
+    property_number: { type: String },
+    floor: { type: String },
+    tower_block: { type: String },
+    nearby_landmark: { type: String },
+    // New Transport fields
+    transport_name: { type: String },
+    transport_location: { type: String },
+    transportation_landmark: { type: String },
     average_fee: { type: Number },
     strength: { type: Number, default: 0, min: 0 },
     products: { type: [productSchema], default: [] },
@@ -103,6 +113,18 @@ const dcOrderSchema = new mongoose.Schema(
         pod_proof_url: { type: String },
         remarks: { type: String },
         total_amount: { type: Number },
+        // Delivery and Address fields (old)
+        property_number: { type: String },
+        floor: { type: String },
+        tower_block: { type: String },
+        nearby_landmark: { type: String },
+        area: { type: String },
+        city: { type: String },
+        pincode: { type: String },
+        // Transport fields (new)
+        transport_name: { type: String },
+        transport_location: { type: String },
+        transportation_landmark: { type: String },
         // Metadata
         requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         requestedAt: { type: Date, default: Date.now },

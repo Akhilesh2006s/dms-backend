@@ -363,7 +363,11 @@ const update = async (req, res) => {
       'contact_person2', 'contact_mobile2', 'email', 'address', 'school_type',
       'pincode', 'state', 'city', 'region', 'area',
       'average_fee', 'branches', 'strength', 'remarks',
-      'estimated_delivery_date', 'products', 'dcRequestData'
+      'estimated_delivery_date', 'products', 'dcRequestData', 'total_amount',
+      // Delivery address fields (old)
+      'property_number', 'floor', 'tower_block', 'nearby_landmark', 'pod_proof_url',
+      // Transport fields (new)
+      'transport_name', 'transport_location', 'transportation_landmark'
     ];
     fieldsToUpdate.forEach(field => {
       if (req.body[field] !== undefined) {
@@ -542,6 +546,17 @@ const hold = async (req, res) => {
 const submitEdit = async (req, res) => {
   try {
     console.log('Submit edit request received for ID:', req.params.id);
+    console.log('Full request body keys:', Object.keys(req.body));
+    console.log('Delivery address fields received:', {
+      property_number: req.body.property_number,
+      floor: req.body.floor,
+      tower_block: req.body.tower_block,
+      nearby_landmark: req.body.nearby_landmark,
+      area: req.body.area,
+      city: req.body.city,
+      pincode: req.body.pincode,
+    });
+    console.log('Full request body (first 500 chars):', JSON.stringify(req.body).substring(0, 500));
     const item = await DcOrder.findById(req.params.id);
     if (!item) {
       console.log('DC Order not found:', req.params.id);
@@ -553,35 +568,118 @@ const submitEdit = async (req, res) => {
       return res.status(400).json({ message: 'There is already a pending edit request for this DC' });
     }
 
-    // Create pending edit object with the edited data
+    // Extract transport fields - these will be saved directly to main DcOrder (no approval needed)
+    const transportFields = {
+      transport_name: (req.body.transport_name !== undefined && req.body.transport_name !== null) ? String(req.body.transport_name) : '',
+      transport_location: (req.body.transport_location !== undefined && req.body.transport_location !== null) ? String(req.body.transport_location) : '',
+      transportation_landmark: (req.body.transportation_landmark !== undefined && req.body.transportation_landmark !== null) ? String(req.body.transportation_landmark) : '',
+      pincode: (req.body.pincode !== undefined && req.body.pincode !== null) ? String(req.body.pincode) : '',
+    };
+    
+    // Keep old delivery address fields for backwards compatibility
+    const deliveryAddressFields = {
+      property_number: (req.body.property_number !== undefined && req.body.property_number !== null) ? String(req.body.property_number) : '',
+      floor: (req.body.floor !== undefined && req.body.floor !== null) ? String(req.body.floor) : '',
+      tower_block: (req.body.tower_block !== undefined && req.body.tower_block !== null) ? String(req.body.tower_block) : '',
+      nearby_landmark: (req.body.nearby_landmark !== undefined && req.body.nearby_landmark !== null) ? String(req.body.nearby_landmark) : '',
+      area: (req.body.area !== undefined && req.body.area !== null) ? String(req.body.area) : '',
+      city: (req.body.city !== undefined && req.body.city !== null) ? String(req.body.city) : '',
+    };
+
+    console.log('Transport fields to save directly:', transportFields);
+    console.log('Delivery address fields to save directly:', deliveryAddressFields);
+
+    // Create pending edit object with only the fields that need approval (excluding delivery address and transport fields)
     const pendingEdit = {
-      school_name: req.body.school_name,
-      contact_person: req.body.contact_person,
-      contact_mobile: req.body.contact_mobile,
-      contact_person2: req.body.contact_person2,
-      contact_mobile2: req.body.contact_mobile2,
-      email: req.body.email,
-      address: req.body.address,
-      school_type: req.body.school_type,
-      zone: req.body.zone,
-      location: req.body.location,
+      school_name: req.body.school_name || '',
+      contact_person: req.body.contact_person || '',
+      contact_mobile: req.body.contact_mobile || '',
+      contact_person2: req.body.contact_person2 || '',
+      contact_mobile2: req.body.contact_mobile2 || '',
+      email: req.body.email || '',
+      address: req.body.address || '',
+      school_type: req.body.school_type || '',
+      zone: req.body.zone || '',
+      location: req.body.location || '',
       products: req.body.products || [],
-      pod_proof_url: req.body.pod_proof_url,
-      remarks: req.body.remarks,
-      total_amount: req.body.total_amount,
+      pod_proof_url: req.body.pod_proof_url || '',
+      remarks: req.body.remarks || '',
+      total_amount: req.body.total_amount || 0,
+      // Transport fields (new)
+      transport_name: req.body.transport_name || '',
+      transport_location: req.body.transport_location || '',
+      transportation_landmark: req.body.transportation_landmark || '',
       requestedBy: req.user._id,
       requestedAt: new Date(),
       status: 'pending',
     };
 
+    console.log('Pending edit object (fields requiring approval):', JSON.stringify(pendingEdit, null, 2));
+
+    // Update DcOrder: Save transport + delivery address directly + save other fields to pendingEdit for approval
     const updatedItem = await DcOrder.findByIdAndUpdate(
       req.params.id,
-      { pendingEdit },
+      {
+        // Save transport fields and delivery address fields directly to main document (no approval needed)
+        $set: {
+          // Transport fields (new)
+          transport_name: transportFields.transport_name,
+          transport_location: transportFields.transport_location,
+          transportation_landmark: transportFields.transportation_landmark,
+          pincode: transportFields.pincode,
+          // Delivery address fields (old - backwards compatibility)
+          property_number: deliveryAddressFields.property_number,
+          floor: deliveryAddressFields.floor,
+          tower_block: deliveryAddressFields.tower_block,
+          nearby_landmark: deliveryAddressFields.nearby_landmark,
+          area: deliveryAddressFields.area,
+          city: deliveryAddressFields.city,
+          // Save other fields to pendingEdit for approval
+          pendingEdit: pendingEdit,
+        }
+      },
       { new: true, runValidators: true }
     )
       .populate('created_by', 'name email')
       .populate('assigned_to', 'name email')
       .populate('pendingEdit.requestedBy', 'name email');
+
+    // Also update related DC records with delivery address (saved directly, no approval needed)
+    try {
+      const relatedDCs = await DC.find({ dcOrderId: new mongoose.Types.ObjectId(req.params.id) });
+      
+      if (relatedDCs.length > 0) {
+        const dcUpdateData = {
+          property_number: deliveryAddressFields.property_number,
+          floor: deliveryAddressFields.floor,
+          tower_block: deliveryAddressFields.tower_block,
+          nearby_landmark: deliveryAddressFields.nearby_landmark,
+          area: deliveryAddressFields.area,
+          city: deliveryAddressFields.city,
+          pincode: deliveryAddressFields.pincode,
+        };
+        
+        await DC.updateMany(
+          { dcOrderId: new mongoose.Types.ObjectId(req.params.id) },
+          { $set: dcUpdateData }
+        );
+        console.log(`Updated ${relatedDCs.length} related DC records with delivery address (saved directly)`);
+      }
+    } catch (dcUpdateError) {
+      // Log error but don't fail the submission
+      console.error('Error updating related DC records with delivery address:', dcUpdateError);
+    }
+
+    // Verify the saved data
+    console.log('Saved delivery address directly to DcOrder:', {
+      property_number: updatedItem.property_number,
+      floor: updatedItem.floor,
+      tower_block: updatedItem.tower_block,
+      nearby_landmark: updatedItem.nearby_landmark,
+      area: updatedItem.area,
+      city: updatedItem.city,
+      pincode: updatedItem.pincode,
+    });
 
     res.json(updatedItem);
   } catch (e) {
@@ -608,6 +706,7 @@ const approveEdit = async (req, res) => {
 
     if (action === 'approve') {
       // Apply the pending edit to the main document
+      // Note: Delivery address fields are NOT included here - they were already saved directly when edit was submitted
       const updateData = {
         school_name: item.pendingEdit.school_name !== undefined ? item.pendingEdit.school_name : item.school_name,
         contact_person: item.pendingEdit.contact_person !== undefined ? item.pendingEdit.contact_person : item.contact_person,
@@ -623,6 +722,11 @@ const approveEdit = async (req, res) => {
         pod_proof_url: item.pendingEdit.pod_proof_url !== undefined ? item.pendingEdit.pod_proof_url : item.pod_proof_url,
         remarks: item.pendingEdit.remarks !== undefined ? item.pendingEdit.remarks : item.remarks,
         total_amount: item.pendingEdit.total_amount !== undefined ? item.pendingEdit.total_amount : item.total_amount,
+        // Transport fields (new)
+        transport_name: item.pendingEdit.transport_name !== undefined ? item.pendingEdit.transport_name : item.transport_name,
+        transport_location: item.pendingEdit.transport_location !== undefined ? item.pendingEdit.transport_location : item.transport_location,
+        transportation_landmark: item.pendingEdit.transportation_landmark !== undefined ? item.pendingEdit.transportation_landmark : item.transportation_landmark,
+        // Delivery address fields are NOT updated here - they were already saved directly when edit was submitted
         'pendingEdit.status': 'approved',
         'pendingEdit.approvedBy': req.user._id,
         'pendingEdit.approvedAt': new Date(),
@@ -646,7 +750,7 @@ const approveEdit = async (req, res) => {
         if (relatedDCs.length > 0) {
           const dcUpdateData = {};
           
-          // Update DC fields that correspond to DcOrder fields
+          // Update DC fields that correspond to DcOrder fields (from pendingEdit - approved changes)
           if (item.pendingEdit.school_name !== undefined) {
             dcUpdateData.customerName = item.pendingEdit.school_name;
           }
@@ -664,13 +768,40 @@ const approveEdit = async (req, res) => {
             dcUpdateData.poDocument = item.pendingEdit.pod_proof_url; // Also update legacy field
           }
           
+          // Update delivery address fields from main DcOrder (they were already saved directly)
+          // Get the updated item to ensure we have the latest delivery address
+          const updatedDcOrder = await DcOrder.findById(req.params.id);
+          if (updatedDcOrder) {
+            if (updatedDcOrder.property_number !== undefined) {
+              dcUpdateData.property_number = updatedDcOrder.property_number;
+            }
+            if (updatedDcOrder.floor !== undefined) {
+              dcUpdateData.floor = updatedDcOrder.floor;
+            }
+            if (updatedDcOrder.tower_block !== undefined) {
+              dcUpdateData.tower_block = updatedDcOrder.tower_block;
+            }
+            if (updatedDcOrder.nearby_landmark !== undefined) {
+              dcUpdateData.nearby_landmark = updatedDcOrder.nearby_landmark;
+            }
+            if (updatedDcOrder.area !== undefined) {
+              dcUpdateData.area = updatedDcOrder.area;
+            }
+            if (updatedDcOrder.city !== undefined) {
+              dcUpdateData.city = updatedDcOrder.city;
+            }
+            if (updatedDcOrder.pincode !== undefined) {
+              dcUpdateData.pincode = updatedDcOrder.pincode;
+            }
+          }
+          
           // Update all related DCs
           if (Object.keys(dcUpdateData).length > 0) {
             await DC.updateMany(
               { dcOrderId: new mongoose.Types.ObjectId(req.params.id) },
               { $set: dcUpdateData }
             );
-            console.log(`Updated ${relatedDCs.length} related DC records with approved changes`);
+            console.log(`Updated ${relatedDCs.length} related DC records with approved changes and delivery address`);
           }
         }
       } catch (dcUpdateError) {

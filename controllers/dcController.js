@@ -71,7 +71,7 @@ const getDCs = async (req, res) => {
 
     // Optimize query - fetch without populate first, then populate if needed
     let dcs = await DC.find(filter)
-      .select('_id saleId dcOrderId employeeId customerName customerPhone customerEmail customerAddress product requestedQuantity availableQuantity deliverableQuantity status poPhotoUrl poDocument productDetails dcDate dcRemarks dcCategory dcNotes transport lrNo lrDate boxes transportArea deliveryStatus financeRemarks splApproval smeRemarks warehouseProcessedAt warehouseProcessedBy completedAt completedBy createdAt updatedAt')
+      .select('_id saleId dcOrderId employeeId customerName customerPhone customerEmail customerAddress product requestedQuantity availableQuantity deliverableQuantity status poPhotoUrl poDocument productDetails dcDate dcRemarks dcCategory dcNotes transport lrNo lrDate lrCost boxes transportArea deliveryStatus financeRemarks splApproval smeRemarks warehouseProcessedAt warehouseProcessedBy completedAt completedBy createdAt updatedAt')
       .sort({ createdAt: -1 })
       .lean()
       .maxTimeMS(20000); // 20 second timeout
@@ -149,7 +149,7 @@ const getDC = async (req, res) => {
   try {
     const dc = await DC.findById(req.params.id)
       .populate('saleId', 'customerName product quantity status poDocument poSubmittedAt poSubmittedBy')
-      .populate('dcOrderId', 'school_name contact_person contact_mobile email address location zone products due_amount due_percentage')
+      .populate('dcOrderId', 'school_name contact_person contact_mobile email address location zone products due_amount due_percentage transport_name transport_location transportation_landmark pincode')
       .populate('employeeId', 'name email')
       .populate('adminId', 'name email')
       .populate('managerId', 'name email')
@@ -201,11 +201,42 @@ const raiseDC = async (req, res) => {
     }
 
     const DcOrder = require('../models/DcOrder');
-    const dcOrder = await DcOrder.findById(dcOrderId)
+    const Lead = require('../models/Lead');
+    let dcOrder = await DcOrder.findById(dcOrderId)
       .populate('assigned_to', 'name email');
 
+    // If no DcOrder found, the id may be a Lead id (close lead from follow-up → Turn to Client)
     if (!dcOrder) {
-      console.log('❌ DcOrder not found:', dcOrderId);
+      const lead = await Lead.findById(dcOrderId);
+      if (lead) {
+        console.log('📋 Lead found (converting to client), creating DcOrder from lead:', lead.school_name);
+        const productsFromDetails = (productDetails && Array.isArray(productDetails))
+          ? productDetails.map(p => ({
+              product_name: p.product || p.product_name || 'Abacus',
+              quantity: Number(p.quantity) || Number(p.strength) || 1,
+              unit_price: Number(p.price) || 0,
+            }))
+          : (lead.products && lead.products.length) ? lead.products : [{ product_name: 'Abacus', quantity: 1, unit_price: 0 }];
+        dcOrder = await DcOrder.create({
+          school_name: lead.school_name || 'School',
+          contact_person: lead.contact_person,
+          contact_mobile: lead.contact_mobile,
+          email: lead.email,
+          location: lead.location,
+          zone: lead.zone,
+          school_type: lead.school_type || 'New',
+          products: productsFromDetails,
+          assigned_to: req.body.employeeId || req.user._id,
+          status: 'completed',
+          estimated_delivery_date: req.body.dcDate ? new Date(req.body.dcDate) : undefined,
+          created_by: req.user._id,
+        });
+        console.log('✅ DcOrder created from lead:', dcOrder._id);
+      }
+    }
+
+    if (!dcOrder) {
+      console.log('❌ DcOrder/Lead not found:', dcOrderId);
       return res.status(404).json({ message: 'Deal/Lead not found' });
     }
     
@@ -215,8 +246,8 @@ const raiseDC = async (req, res) => {
       assignedTo: dcOrder.assigned_to
     });
 
-    // Check if DC already exists for this DcOrder
-    let dc = await DC.findOne({ dcOrderId });
+    // Check if DC already exists for this DcOrder (use dcOrder._id, not request dcOrderId which may be a Lead id)
+    let dc = await DC.findOne({ dcOrderId: dcOrder._id });
     
     if (dc) {
       // If DC exists, update employeeId if provided (for lead conversion - employee converting lead should own the client)
@@ -236,6 +267,10 @@ const raiseDC = async (req, res) => {
       // Update productDetails if provided (for lead conversion)
       if (req.body.productDetails && Array.isArray(req.body.productDetails)) {
         dc.productDetails = req.body.productDetails;
+      }
+      // Update status if provided (for Closed Sales - should be pending_dc)
+      if (req.body.status) {
+        dc.status = req.body.status;
       }
     }
     
@@ -336,6 +371,11 @@ const raiseDC = async (req, res) => {
     }
     // Explicitly provided requestedQuantity takes priority
     if (requestedQuantity) dc.requestedQuantity = requestedQuantity;
+    
+    // Update status if provided (for Closed Sales - should be pending_dc)
+    if (req.body.status) {
+      dc.status = req.body.status;
+    }
     
     // If PO photo is provided and DC is new, set it
     if (req.body.poPhotoUrl && !dc.poPhotoUrl) {
@@ -568,12 +608,13 @@ const holdDC = async (req, res) => {
       return res.status(404).json({ message: 'DC not found' });
     }
 
-    // DC can be put on hold from Employee status (after delivery) or Warehouse status
-    if (dc.status !== 'Employee' && dc.status !== 'Warehouse') {
-      return res.status(400).json({ message: `DC can only be put on hold from Employee or Warehouse status. Current status: ${dc.status}` });
+    // DC can be put on hold from sent_to_manager (warehouse), warehouse_processing, or legacy Employee/Warehouse status
+    const allowedForHold = ['sent_to_manager', 'warehouse_processing', 'Employee', 'Warehouse'];
+    if (!allowedForHold.includes(dc.status)) {
+      return res.status(400).json({ message: `DC can only be put on hold from sent_to_manager or warehouse_processing. Current status: ${dc.status}` });
     }
 
-    dc.status = 'Hold';
+    dc.status = 'hold';
     dc.holdReason = holdReason || 'No reason provided';
     await dc.save();
 
@@ -651,7 +692,7 @@ const getCompletedDCs = async (req, res) => {
     // Use lowercase 'completed' to match the DC model enum
     // Optimize query - fetch without populate first
     let dcs = await DC.find({ status: 'completed' })
-      .select('_id saleId dcOrderId employeeId customerName customerPhone customerEmail customerAddress product requestedQuantity availableQuantity deliverableQuantity status poPhotoUrl poDocument productDetails dcDate dcRemarks dcCategory dcNotes transport lrNo lrDate boxes transportArea deliveryStatus financeRemarks splApproval smeRemarks warehouseProcessedAt warehouseProcessedBy completedAt completedBy createdAt updatedAt')
+      .select('_id saleId dcOrderId employeeId customerName customerPhone customerEmail customerAddress product requestedQuantity availableQuantity deliverableQuantity status poPhotoUrl poDocument productDetails dcDate dcRemarks dcCategory dcNotes transport lrNo lrDate lrCost boxes transportArea deliveryStatus financeRemarks splApproval smeRemarks warehouseProcessedAt warehouseProcessedBy completedAt completedBy createdAt updatedAt')
       .sort({ completedAt: -1, createdAt: -1 }) // Sort by completedAt first, then createdAt as fallback
       .lean()
       .maxTimeMS(20000);
@@ -660,6 +701,7 @@ const getCompletedDCs = async (req, res) => {
     if (dcs && dcs.length > 0) {
       try {
         const populatedPromise = DC.find({ _id: { $in: dcs.map(dc => dc._id) }, status: 'completed' })
+          .select('_id saleId dcOrderId employeeId customerName customerPhone customerEmail customerAddress product requestedQuantity availableQuantity deliverableQuantity status poPhotoUrl poDocument productDetails dcDate dcRemarks dcCategory dcNotes transport lrNo lrDate lrCost boxes transportArea deliveryStatus financeRemarks splApproval smeRemarks warehouseProcessedAt warehouseProcessedBy completedAt completedBy createdAt updatedAt')
           .populate('saleId', 'customerName product quantity status')
           .populate('dcOrderId', 'school_name school_type contact_person contact_mobile email address location zone products dc_code')
           .populate('employeeId', 'name email')
@@ -918,16 +960,17 @@ const managerRequestWarehouse = async (req, res) => {
     }
 
     // Check if DC is in correct status
-    if (dc.status !== 'sent_to_manager') {
-      return res.status(400).json({ message: `DC must be in 'sent_to_manager' status. Current status: ${dc.status}` });
+    if (dc.status !== 'pending_dc') {
+      return res.status(400).json({ message: `DC must be in 'pending_dc' status. Current status: ${dc.status}` });
     }
 
-    // Update DC with requested quantity and move to pending_dc
+    // All DCs go directly to warehouse regardless of terms - no splitting
     dc.requestedQuantity = requestedQuantity;
-    dc.status = 'pending_dc';
+    dc.status = 'sent_to_manager';
     dc.managerId = req.user._id;
     dc.managerRequestedAt = new Date();
     dc.managerRequestedBy = req.user._id;
+    dc.sentToManagerAt = new Date();
     if (remarks) {
       dc.deliveryNotes = remarks;
     }
@@ -957,9 +1000,9 @@ const warehouseProcess = async (req, res) => {
       return res.status(404).json({ message: 'DC not found' });
     }
 
-    // Check if DC is in correct status (allow both pending_dc and warehouse_processing)
-    if (dc.status !== 'pending_dc' && dc.status !== 'warehouse_processing') {
-      return res.status(400).json({ message: `DC must be in 'pending_dc' or 'warehouse_processing' status. Current status: ${dc.status}` });
+    // Check if DC is in correct status (allow both sent_to_manager and warehouse_processing)
+    if (dc.status !== 'sent_to_manager' && dc.status !== 'warehouse_processing') {
+      return res.status(400).json({ message: `DC must be in 'sent_to_manager' or 'warehouse_processing' status. Current status: ${dc.status}` });
     }
 
     // Update quantities
@@ -1120,12 +1163,14 @@ const getSentToManagerDCs = async (req, res) => {
 // @access  Private (Warehouse)
 const getPendingWarehouseDCs = async (req, res) => {
   try {
-    const dcs = await DC.find({ status: 'pending_dc' })
+    // Fetch all DCs with status 'sent_to_manager' - show all DCs regardless of terms
+    const dcs = await DC.find({ status: 'sent_to_manager' })
       .populate('saleId', 'customerName product quantity status poDocument')
+      .populate('dcOrderId', 'school_name contact_person contact_mobile zone location')
       .populate('employeeId', 'name email')
       .populate('managerId', 'name email')
       .populate('managerRequestedBy', 'name email')
-      .sort({ managerRequestedAt: -1 });
+      .sort({ managerRequestedAt: -1, sentToManagerAt: -1, createdAt: -1 });
 
     // Ensure productDetails always have specs and subject fields
     // Only set defaults if they're actually missing (undefined/null), not if they're empty strings
@@ -1319,10 +1364,15 @@ const getMyDCs = async (req, res) => {
     // This ensures closed leads always appear in "My Clients" for the employee to manage
     const dcOrderAsDCs = savedDcOrders.map(order => {
       // Check if a DC already exists for this DcOrder
-      const existingDC = dcs.find(dc => 
-        dc.dcOrderId && 
-        (typeof dc.dcOrderId === 'object' ? dc.dcOrderId._id.toString() : dc.dcOrderId.toString()) === order._id.toString()
-      );
+      const existingDC = dcs.find(dc => {
+        if (!dc.dcOrderId) return false;
+        if (typeof dc.dcOrderId === 'object') {
+          // Check if _id exists and is not null
+          if (!dc.dcOrderId._id) return false;
+          return dc.dcOrderId._id.toString() === order._id.toString();
+        }
+        return dc.dcOrderId.toString() === order._id.toString();
+      });
       
       // If DC exists with status 'created' or 'po_submitted', skip this DcOrder (it's already in the dcs array and will be shown)
       if (existingDC && (existingDC.status === 'created' || existingDC.status === 'po_submitted')) {
@@ -1347,7 +1397,7 @@ const getMyDCs = async (req, res) => {
           school_type: order.school_type, // Include school_type for category determination
           createdAt: order.createdAt, // Include createdAt for client turned date
         },
-        employeeId: order.assigned_to ? (typeof order.assigned_to === 'object' ? order.assigned_to._id : order.assigned_to) : employeeId,
+        employeeId: order.assigned_to ? (typeof order.assigned_to === 'object' && order.assigned_to._id ? order.assigned_to._id : (typeof order.assigned_to === 'string' ? order.assigned_to : employeeId)) : employeeId,
         customerName: order.school_name,
         customerEmail: order.email,
         customerAddress: order.address || order.location || 'N/A',
@@ -1382,9 +1432,17 @@ const getMyDCs = async (req, res) => {
     const seenDcOrderIds = new Set();
     
     allDCs.forEach(dc => {
-      const dcOrderId = dc.dcOrderId 
-        ? (typeof dc.dcOrderId === 'object' ? dc.dcOrderId._id.toString() : dc.dcOrderId.toString())
-        : null;
+      let dcOrderId = null;
+      if (dc.dcOrderId) {
+        if (typeof dc.dcOrderId === 'object') {
+          // Check if _id exists and is not null before accessing
+          if (dc.dcOrderId._id) {
+            dcOrderId = dc.dcOrderId._id.toString();
+          }
+        } else {
+          dcOrderId = dc.dcOrderId.toString();
+        }
+      }
       
       if (dcOrderId && !seenDcOrderIds.has(dcOrderId)) {
         seenDcOrderIds.add(dcOrderId);
@@ -1450,6 +1508,7 @@ const updateDC = async (req, res) => {
           level: p.level || 'L2',
           specs: p.specs || 'Regular', // Preserve specs
           subject: p.subject || undefined, // Preserve subject
+          term: p.term || 'Term 1', // Preserve term
           availableQuantity: p.availableQuantity !== undefined && p.availableQuantity !== null ? Number(p.availableQuantity) : undefined,
           deliverableQuantity: p.deliverableQuantity !== undefined && p.deliverableQuantity !== null ? Number(p.deliverableQuantity) : undefined,
           remainingQuantity: p.remainingQuantity !== undefined && p.remainingQuantity !== null ? Number(p.remainingQuantity) : undefined,
@@ -1471,7 +1530,18 @@ const updateDC = async (req, res) => {
       }
     }
     if (req.body.requestedQuantity !== undefined) dc.requestedQuantity = req.body.requestedQuantity;
-    if (req.body.status !== undefined) dc.status = req.body.status;
+    if (req.body.status !== undefined) {
+      dc.status = req.body.status;
+      // When moving from hold to sent_to_manager (e.g. "Move to DC@Warehouse"), set timestamps so DC appears in DC @ Warehouse list
+      if (req.body.status === 'sent_to_manager') {
+        dc.sentToManagerAt = dc.sentToManagerAt || new Date();
+        dc.managerRequestedAt = dc.managerRequestedAt || new Date();
+        if (req.user && req.user._id) {
+          dc.managerId = req.user._id;
+          dc.managerRequestedBy = req.user._id;
+        }
+      }
+    }
     if (req.body.listedAt !== undefined) {
       dc.listedAt = req.body.listedAt ? new Date(req.body.listedAt) : undefined;
     }
