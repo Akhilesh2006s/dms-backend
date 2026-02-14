@@ -91,8 +91,52 @@ const getOne = async (req, res) => {
   }
 };
 
+// Update vendor products
+const updateProducts = async (req, res) => {
+  try {
+    const { assignedProducts } = req.body;
+    const vendorId = req.params.id;
+
+    // Validate vendor exists
+    const vendor = await User.findOne({ _id: vendorId, role: 'Vendor' });
+    if (!vendor) {
+      return res.status(404).json({ message: 'Vendor not found' });
+    }
+
+    // Validate products if provided
+    if (assignedProducts !== undefined) {
+      const productIds = Array.isArray(assignedProducts) ? assignedProducts.filter(Boolean) : [];
+      
+      // Validate products exist
+      if (productIds.length > 0) {
+        const products = await Product.find({ _id: { $in: productIds } });
+        if (products.length !== productIds.length) {
+          return res.status(400).json({ message: 'One or more selected products are invalid' });
+        }
+      }
+
+      // Update vendor with new products
+      vendor.vendorAssignedProducts = productIds;
+      await vendor.save();
+    }
+
+    // Return updated vendor
+    const updated = await User.findById(vendorId)
+      .select('-password')
+      .populate('vendorAssignedProducts', 'productName');
+    res.json(updated);
+  } catch (e) {
+    if (e.name === 'ValidationError') {
+      const messages = Object.values(e.errors).map(err => err.message).join('. ');
+      return res.status(400).json({ message: messages });
+    }
+    res.status(500).json({ message: e.message });
+  }
+};
+
 module.exports = {
   list,
   create,
   getOne,
+  updateProducts,
 };

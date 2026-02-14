@@ -7,7 +7,8 @@ router.use(authMiddleware);
 router.use(roleMiddleware('Admin', 'Super Admin'));
 
 router.get('/', vendorController.list);
-router.get('/:id', vendorController.getOne);
 router.post('/', vendorController.create);
+router.put('/:id/products', vendorController.updateProducts);
+router.get('/:id', vendorController.getOne);
 
 module.exports = router;
