@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const enterpriseSchoolSchema = new mongoose.Schema({
+const franchiseSchoolSchema = new mongoose.Schema({
   schoolId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'DcOrder',
@@ -16,17 +16,27 @@ const enterpriseSchoolSchema = new mongoose.Schema({
   },
 }, { _id: true });
 
-const enterpriseSchema = new mongoose.Schema({
-  enterpriseName: {
+const franchiseSchema = new mongoose.Schema({
+  franchiseName: {
     type: String,
     required: true,
   },
-  enterpriseCost: {
+  franchiseEmail: {
+    type: String,
+    required: true,
+    lowercase: true,
+    trim: true,
+  },
+  franchiseCost: {
     type: Number,
     required: true,
     min: 0,
   },
-  schools: [enterpriseSchoolSchema],
+  zones: [{
+    type: String,
+    required: true,
+  }],
+  schools: [franchiseSchoolSchema],
 }, { _id: true });
 
 const productCostSchema = new mongoose.Schema({
@@ -44,11 +54,11 @@ const productCostSchema = new mongoose.Schema({
     required: true,
     min: 0,
   },
-  enterprises: [enterpriseSchema],
+  franchises: [franchiseSchema],
 }, { _id: true });
 
-const vendorCostSchema = new mongoose.Schema({
-  vendorId: {
+const partnerCostSchema = new mongoose.Schema({
+  partnerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
@@ -59,7 +69,7 @@ const vendorCostSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Ensure one cost record per vendor
-vendorCostSchema.index({ vendorId: 1 }, { unique: true });
+// Ensure one cost record per partner
+partnerCostSchema.index({ partnerId: 1 }, { unique: true });
 
-module.exports = mongoose.model('VendorCost', vendorCostSchema);
+module.exports = mongoose.model('PartnerCost', partnerCostSchema);

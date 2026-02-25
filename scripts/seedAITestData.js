@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
+const path = require('path');
+const fs = require('fs');
 const Lead = require('../models/Lead');
 const Sale = require('../models/Sale');
 const Payment = require('../models/Payment');
@@ -8,7 +10,29 @@ const Expense = require('../models/Expense');
 const User = require('../models/User');
 const DcOrder = require('../models/DcOrder');
 
-dotenv.config();
+// Robust .env loading: try backend/.env, project root .env, or current working dir
+(() => {
+  const envPaths = [
+    path.join(__dirname, '..', '.env'),
+    path.join(__dirname, '..', '..', '.env'),
+    path.join(process.cwd(), '.env'),
+  ];
+
+  for (const envPath of envPaths) {
+    try {
+      if (fs.existsSync(envPath)) {
+        dotenv.config({ path: envPath });
+        console.log(`📄 Loaded environment from: ${envPath}`);
+        return;
+      }
+    } catch {
+      // Ignore and try next path
+    }
+  }
+
+  // Fallback to default behavior (may still work if env vars are set at OS level)
+  dotenv.config();
+})();
 
 // Connect to database
 const connectDB = require('../config/db');

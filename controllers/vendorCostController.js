@@ -1,46 +1,46 @@
-const VendorCost = require('../models/VendorCost');
+const PartnerCost = require('../models/VendorCost'); // TODO: Rename file to PartnerCost.js
 const DcOrder = require('../models/DcOrder');
 const Product = require('../models/Product');
 
-// @desc    Get vendor cost configuration
-// @route   GET /api/vendor-costs/:vendorId
+// @desc    Get partner cost configuration
+// @route   GET /api/partner-costs/:partnerId
 // @access  Private (Admin)
-const getVendorCost = async (req, res) => {
+const getPartnerCost = async (req, res) => {
   try {
-    const { vendorId } = req.params;
+    const { partnerId } = req.params;
     
-    let vendorCost = await VendorCost.findOne({ vendorId })
-      .populate('vendorId', 'name email')
+    let partnerCost = await PartnerCost.findOne({ partnerId })
+      .populate('partnerId', 'name email')
       .populate('products.productId', 'productName')
-      .populate('products.enterprises.schools.schoolId', 'school_name school_code zone location');
+      .populate('products.franchises.schools.schoolId', 'school_name school_code zone location');
     
-    if (!vendorCost) {
+    if (!partnerCost) {
       // Return default structure if not found
       return res.json({
-        vendorId,
+        partnerId,
         products: [],
       });
     }
     
-    res.json(vendorCost);
+    res.json(partnerCost);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
 
-// @desc    Create or update vendor cost configuration
-// @route   PUT /api/vendor-costs/:vendorId
+// @desc    Create or update partner cost configuration
+// @route   PUT /api/partner-costs/:partnerId
 // @access  Private (Admin)
-const updateVendorCost = async (req, res) => {
+const updatePartnerCost = async (req, res) => {
   try {
-    const { vendorId } = req.params;
+    const { partnerId } = req.params;
     const { products } = req.body;
     
-    // Validate vendor exists
+    // Validate partner exists
     const User = require('../models/User');
-    const vendor = await User.findById(vendorId);
-    if (!vendor || vendor.role !== 'Vendor') {
-      return res.status(404).json({ message: 'Vendor not found' });
+    const partner = await User.findById(partnerId);
+    if (!partner || partner.role !== 'Partner') {
+      return res.status(404).json({ message: 'Partner not found' });
     }
     
     // Validate products structure
@@ -62,19 +62,36 @@ const updateVendorCost = async (req, res) => {
           return res.status(400).json({ message: `Product with ID ${product.productId} not found` });
         }
         
-        // Validate enterprises
-        if (product.enterprises && Array.isArray(product.enterprises)) {
-          for (const enterprise of product.enterprises) {
-            if (!enterprise.enterpriseName || enterprise.enterpriseName.trim() === '') {
-              return res.status(400).json({ message: 'Enterprise name is required' });
+        // Validate franchises
+        if (product.franchises && Array.isArray(product.franchises)) {
+          for (const franchise of product.franchises) {
+            if (!franchise.franchiseName || franchise.franchiseName.trim() === '') {
+              return res.status(400).json({ message: 'Franchise name is required' });
             }
-            if (enterprise.enterpriseCost === undefined || enterprise.enterpriseCost < 0) {
-              return res.status(400).json({ message: 'Enterprise cost must be a non-negative number' });
+            if (!franchise.franchiseEmail || franchise.franchiseEmail.trim() === '') {
+              return res.status(400).json({ message: 'Franchise email is required' });
+            }
+            // Basic email validation
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(franchise.franchiseEmail.trim())) {
+              return res.status(400).json({ message: 'Franchise email must be a valid email address' });
+            }
+            if (franchise.franchiseCost === undefined || franchise.franchiseCost < 0) {
+              return res.status(400).json({ message: 'Franchise cost must be a non-negative number' });
+            }
+            
+            // Validate zones
+            if (franchise.zones && Array.isArray(franchise.zones)) {
+              for (const zone of franchise.zones) {
+                if (!zone || typeof zone !== 'string' || zone.trim() === '') {
+                  return res.status(400).json({ message: 'Zone must be a non-empty string' });
+                }
+              }
             }
             
             // Validate schools
-            if (enterprise.schools && Array.isArray(enterprise.schools)) {
-              for (const school of enterprise.schools) {
+            if (franchise.schools && Array.isArray(franchise.schools)) {
+              for (const school of franchise.schools) {
                 if (!school.schoolId) {
                   return res.status(400).json({ message: 'School ID is required' });
                 }
@@ -90,20 +107,20 @@ const updateVendorCost = async (req, res) => {
       }
     }
     
-    // Create or update vendor cost
-    const vendorCost = await VendorCost.findOneAndUpdate(
-      { vendorId },
+    // Create or update partner cost
+    const partnerCost = await PartnerCost.findOneAndUpdate(
+      { partnerId },
       {
-        vendorId,
+        partnerId,
         products: products || [],
       },
       { upsert: true, new: true, runValidators: true }
     )
-      .populate('vendorId', 'name email')
+      .populate('partnerId', 'name email')
       .populate('products.productId', 'productName')
-      .populate('products.enterprises.schools.schoolId', 'school_name school_code zone location');
+      .populate('products.franchises.schools.schoolId', 'school_name school_code zone location');
     
-    res.json(vendorCost);
+    res.json(partnerCost);
   } catch (error) {
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(err => err.message).join('. ');
@@ -114,7 +131,7 @@ const updateVendorCost = async (req, res) => {
 };
 
 // @desc    Get all schools
-// @route   GET /api/vendor-costs/schools
+// @route   GET /api/partner-costs/schools
 // @access  Private (Admin)
 const getAllSchools = async (req, res) => {
   try {
@@ -130,7 +147,7 @@ const getAllSchools = async (req, res) => {
 };
 
 // @desc    Get schools by zone
-// @route   GET /api/vendor-costs/schools/zone/:zone
+// @route   GET /api/partner-costs/schools/zone/:zone
 // @access  Private (Admin)
 const getSchoolsByZone = async (req, res) => {
   try {
@@ -148,7 +165,7 @@ const getSchoolsByZone = async (req, res) => {
 };
 
 // @desc    Get all zones
-// @route   GET /api/vendor-costs/zones
+// @route   GET /api/partner-costs/zones
 // @access  Private (Admin)
 const getZones = async (req, res) => {
   try {
@@ -161,8 +178,8 @@ const getZones = async (req, res) => {
 };
 
 module.exports = {
-  getVendorCost,
-  updateVendorCost,
+  getPartnerCost,
+  updatePartnerCost,
   getAllSchools,
   getSchoolsByZone,
   getZones,
