@@ -7,6 +7,7 @@ const DmsBranch = require('../models/DmsBranch');
 const DmsVariant = require('../models/DmsVariant');
 const DmsFacility = require('../models/DmsFacility');
 const DmsVinFinance = require('../models/DmsVinFinance');
+const WcxExposure = require('../models/WcxExposure');
 
 // Helpers
 function num(value) {
@@ -341,6 +342,106 @@ exports.createVinFinance = async (req, res) => {
   } catch (err) {
     console.error('createVinFinance error:', err);
     res.status(500).json({ message: 'Failed to create VIN financing row', error: err.message });
+  }
+};
+
+// =========================
+// ANALYTICS / DECISION LAYER
+// =========================
+
+// @route GET /api/dms/analytics/working-capital
+// @desc  Branch-level working capital and risk summary
+exports.getWorkingCapitalSummary = async (req, res) => {
+  try {
+    // Load core DMS entities
+    const [branches, vehicles, wcxRows] = await Promise.all([
+      DmsBranch.find({}).lean(),
+      DmsVehicle.find({}).lean(),
+      WcxExposure.find({}).lean(),
+    ]);
+
+    // Group helpers
+    const vehiclesByBranch = new Map();
+    vehicles.forEach((v) => {
+      if (!v.branch_id) return;
+      const key = v.branch_id;
+      if (!vehiclesByBranch.has(key)) vehiclesByBranch.set(key, []);
+      vehiclesByBranch.get(key).push(v);
+    });
+
+    const wcxByBranch = new Map();
+    wcxRows.forEach((row) => {
+      if (!row.branch_id) return;
+      const key = row.branch_id;
+      if (!wcxByBranch.has(key)) wcxByBranch.set(key, []);
+      wcxByBranch.get(key).push(row);
+    });
+
+    const branchSummaries = [];
+
+    let totalVehicles = 0;
+    let totalWcxVehicles = 0;
+    let totalWorkingCapital = 0;
+    let totalInterestExposure = 0;
+    let totalHighRisk = 0;
+    let totalCritical = 0;
+
+    branches.forEach((b) => {
+      const branchId = b.branch_id;
+      const branchVehicles = vehiclesByBranch.get(branchId) || [];
+      const branchWcx = wcxByBranch.get(branchId) || [];
+
+      const workingCapital = branchWcx.reduce(
+        (sum, r) => sum + (r.working_capital_locked_inr || 0),
+        0
+      );
+      const interestExposure = branchWcx.reduce(
+        (sum, r) => sum + (r.interest_exposure_inr || 0),
+        0
+      );
+
+      const highRiskCount = branchWcx.filter((r) => r.risk_tag === 'High').length;
+      const criticalCount = branchWcx.filter((r) => r.risk_tag === 'Critical').length;
+
+      totalVehicles += branchVehicles.length;
+      totalWcxVehicles += branchWcx.length;
+      totalWorkingCapital += workingCapital;
+      totalInterestExposure += interestExposure;
+      totalHighRisk += highRiskCount;
+      totalCritical += criticalCount;
+
+      branchSummaries.push({
+        branch_id: branchId,
+        branch_name: b.branch_name,
+        city: b.city,
+        state: b.state,
+        oem: b.oem,
+        total_vehicles: branchVehicles.length,
+        wcx_vehicle_count: branchWcx.length,
+        working_capital_locked_inr: workingCapital,
+        interest_exposure_inr: interestExposure,
+        high_risk_count: highRiskCount,
+        critical_count: criticalCount,
+      });
+    });
+
+    res.json({
+      branches: branchSummaries,
+      totals: {
+        branches: branches.length,
+        vehicles: totalVehicles,
+        wcx_vehicles: totalWcxVehicles,
+        working_capital_locked_inr: totalWorkingCapital,
+        interest_exposure_inr: totalInterestExposure,
+        high_risk_count: totalHighRisk,
+        critical_count: totalCritical,
+      },
+    });
+  } catch (err) {
+    console.error('getWorkingCapitalSummary error:', err);
+    res
+      .status(500)
+      .json({ message: 'Failed to compute working capital summary', error: err.message });
   }
 };
 

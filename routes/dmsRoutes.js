@@ -33,6 +33,11 @@ router.get('/leads', authMiddleware, listLeads);
 router.get('/vehicles', authMiddleware, listVehicles);
 router.get('/facilities', authMiddleware, listFacilities);
 router.get('/vin-financing', authMiddleware, listVinFinancing);
+router.get(
+  '/analytics/working-capital',
+  authMiddleware,
+  require('../controllers/dmsController').getWorkingCapitalSummary
+);
 
 // Create APIs
 router.post('/branches', authMiddleware, createBranch);
