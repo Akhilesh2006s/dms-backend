@@ -13,7 +13,10 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "seed:saved-dc": "node scripts/seedSavedDC.js",
     "seed:closed-sales": "node scripts/seedClosedSales.js",
-    "seed:ai-data": "node scripts/seedAITestData.js"
+    "seed:ai-data": "node scripts/seedAITestData.js",
+    "seed:wcx": "node scripts/seedWcxFromExcel.js",
+    "seed:dms": "node scripts/seedDmsFromExcel.js",
+    "create:superadmin": "node scripts/createSuperAdmin.js"
   },
   "keywords": [
     "crm",

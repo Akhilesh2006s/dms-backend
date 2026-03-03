@@ -34,6 +34,8 @@ const sampleRequestRoutes = require('./routes/sampleRequestRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const apiKeyRoutes = require('./routes/apiKeyRoutes');
 const automationApiRoutes = require('./routes/automationApiRoutes');
+const wcxRoutes = require('./routes/wcxRoutes');
+const dmsRoutes = require('./routes/dmsRoutes');
 
 dotenv.config();
 
@@ -176,6 +178,8 @@ app.use('/api/automation', automationApiRoutes);
 app.use('/api/zones-clusters', require('./routes/zoneClusterRoutes'));
 app.use('/api/zones', require('./routes/zoneRoutes'));
 app.use('/api/clusters', require('./routes/clusterRoutes'));
+app.use('/api/wcx', wcxRoutes);
+app.use('/api/dms', dmsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
